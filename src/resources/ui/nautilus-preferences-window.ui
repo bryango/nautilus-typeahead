@@ -51,6 +51,21 @@
                 <property name="visible">True</property>
               </object>
             </child>
+            <child>
+              <object class="AdwActionRow">
+                <property name="activatable_widget">type_ahead_search</property>
+                <property name="subtitle_lines">0</property>
+                <property name="title" translatable="yes">Search on type ahead</property>
+                <property name="title_lines">0</property>
+                <property name="use_underline">True</property>
+                <property name="visible">True</property>
+                <child>
+                  <object class="GtkSwitch" id="type_ahead_search">
+                    <property name="valign">center</property>
+                  </object>
+                </child>
+              </object>
+            </child>
           </object>
         </child>
         <child>

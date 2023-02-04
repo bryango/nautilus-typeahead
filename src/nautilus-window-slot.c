@@ -105,10 +105,6 @@ struct _NautilusWindowSlot
     /* Query editor */
     NautilusQueryEditor *query_editor;
     NautilusQuery *pending_search_query;
-    gulong qe_changed_id;
-    gulong qe_cancel_id;
-    gulong qe_activated_id;
-    gulong qe_focus_view_id;
 
     GtkLabel *search_info_label;
     GtkRevealer *search_info_label_revealer;
@@ -179,6 +175,7 @@ static void real_set_templates_menu (NautilusWindowSlot *self,
                                      GMenuModel         *menu);
 static GMenuModel *real_get_templates_menu (NautilusWindowSlot *self);
 static void nautilus_window_slot_setup_extra_location_widgets (NautilusWindowSlot *self);
+static GFile *nautilus_window_slot_get_current_location (NautilusWindowSlot *self);
 
 void
 free_navigation_state (gpointer data)
@@ -447,6 +444,12 @@ query_editor_focus_view_callback (NautilusQueryEditor *editor,
     }
 }
 
+static gboolean
+type_ahead_search (void)
+{
+    return g_settings_get_boolean (nautilus_preferences, NAUTILUS_PREFERENCES_TYPE_AHEAD_SEARCH);
+}
+
 static void
 query_editor_changed_callback (NautilusQueryEditor *editor,
                                NautilusQuery       *query,
@@ -457,8 +460,47 @@ query_editor_changed_callback (NautilusQueryEditor *editor,
 
     view = nautilus_window_slot_get_current_view (self);
 
-    nautilus_view_set_search_query (view, query);
-    nautilus_window_slot_open_location_full (self, nautilus_view_get_location (view), 0, NULL);
+    if (type_ahead_search () || nautilus_window_slot_get_searching (self))
+    {
+        nautilus_view_set_search_query (view, query);
+        nautilus_window_slot_open_location_full (self, nautilus_view_get_location (view), 0, NULL);
+    }
+    else
+    {
+        /* Find all files with a display name that starts with the query, case insensitive. */
+        GFile *location = nautilus_window_slot_get_current_location (self);
+        g_autoptr (NautilusDirectory) directory = nautilus_directory_get (location);
+        const gchar *text = nautilus_query_get_text (query);
+        g_autofree gchar *text_casefold = g_utf8_casefold (text, -1);
+        g_autofree gchar *text_collate = g_utf8_collate_key_for_filename (text_casefold, -1);
+        gsize text_len = strlen (text);
+        GList *files, *l;
+        GList *matches = NULL;
+
+        files = nautilus_directory_get_file_list (directory);
+        for (l = files; l; l = l->next)
+        {
+            NautilusFile *file = NAUTILUS_FILE (l->data);
+            g_autofree const gchar *name = nautilus_file_get_display_name (file);
+            g_autofree const gchar *name_casefold = g_utf8_casefold (name, text_len);
+            g_autofree const gchar *name_collate = g_utf8_collate_key_for_filename (name_casefold, -1);
+
+            if (g_str_equal (name_collate, text_collate))
+            {
+                matches = g_list_prepend (matches, nautilus_file_ref (file));
+            }
+        }
+
+        /* Select the first match */
+        matches = nautilus_file_list_sort_by_display_name (matches);
+        l = matches;
+        matches = g_list_remove_link (matches, l);
+        nautilus_view_set_selection (self->content_view, l);
+
+        nautilus_file_list_free (files);
+        nautilus_file_list_free (matches);
+        nautilus_file_list_free (l);
+    }
 }
 
 static void
@@ -467,11 +509,6 @@ hide_query_editor (NautilusWindowSlot *self)
     NautilusView *view;
 
     view = nautilus_window_slot_get_current_view (self);
-
-    g_clear_signal_handler (&self->qe_changed_id, self->query_editor);
-    g_clear_signal_handler (&self->qe_cancel_id, self->query_editor);
-    g_clear_signal_handler (&self->qe_activated_id, self->query_editor);
-    g_clear_signal_handler (&self->qe_focus_view_id, self->query_editor);
 
     nautilus_query_editor_set_query (self->query_editor, NULL);
 
@@ -534,31 +571,6 @@ show_query_editor (NautilusWindowSlot *self)
     }
 
     gtk_widget_grab_focus (GTK_WIDGET (self->query_editor));
-
-    if (self->qe_changed_id == 0)
-    {
-        self->qe_changed_id =
-            g_signal_connect (self->query_editor, "changed",
-                              G_CALLBACK (query_editor_changed_callback), self);
-    }
-    if (self->qe_cancel_id == 0)
-    {
-        self->qe_cancel_id =
-            g_signal_connect (self->query_editor, "cancel",
-                              G_CALLBACK (query_editor_cancel_callback), self);
-    }
-    if (self->qe_activated_id == 0)
-    {
-        self->qe_activated_id =
-            g_signal_connect (self->query_editor, "activated",
-                              G_CALLBACK (query_editor_activated_callback), self);
-    }
-    if (self->qe_focus_view_id == 0)
-    {
-        self->qe_focus_view_id =
-            g_signal_connect (self->query_editor, "focus-view",
-                              G_CALLBACK (query_editor_focus_view_callback), self);
-    }
 }
 
 static void
@@ -653,7 +665,7 @@ nautilus_window_slot_handle_event (NautilusWindowSlot    *self,
                                                      state);
     }
 
-    if (retval)
+    if (retval && type_ahead_search ())
     {
         nautilus_window_slot_set_search_visible (self, TRUE);
     }
@@ -685,6 +697,7 @@ nautilus_window_slot_set_searching (NautilusWindowSlot *self,
 {
     self->searching = searching;
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SEARCHING]);
+    nautilus_query_editor_set_searching (self->query_editor, searching);
 }
 
 static void
@@ -921,6 +934,15 @@ nautilus_window_slot_constructed (GObject *object)
     gtk_widget_show (extras_vbox);
 
     self->query_editor = NAUTILUS_QUERY_EDITOR (nautilus_query_editor_new ());
+    g_signal_connect (self->query_editor, "changed",
+                      G_CALLBACK (query_editor_changed_callback), self);
+    g_signal_connect (self->query_editor, "cancel",
+                      G_CALLBACK (query_editor_cancel_callback), self);
+    g_signal_connect (self->query_editor, "activated",
+                      G_CALLBACK (query_editor_activated_callback), self);
+    g_signal_connect (self->query_editor, "focus-view",
+                      G_CALLBACK (query_editor_focus_view_callback), self);
+
     /* We want to keep alive the query editor betwen additions and removals on the
      * UI, specifically when the toolbar adds or removes it */
     g_object_ref_sink (self->query_editor);

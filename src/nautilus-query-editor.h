@@ -77,3 +77,6 @@ nautilus_query_editor_handle_event (NautilusQueryEditor   *self,
                                     GtkEventControllerKey *controller,
                                     guint                  keyval,
                                     GdkModifierType        state);
+
+void nautilus_query_editor_set_searching (NautilusQueryEditor   *editor,
+                                          gboolean               searching);

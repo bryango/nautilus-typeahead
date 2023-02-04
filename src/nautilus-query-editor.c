@@ -52,6 +52,9 @@ struct _NautilusQueryEditor
     guint search_changed_timeout_id;
     gboolean change_frozen;
 
+    guint clear_type_ahead_timeout_id;
+    gboolean searching;
+
     GFile *location;
 
     NautilusQuery *query;
@@ -89,6 +92,9 @@ G_DEFINE_TYPE (NautilusQueryEditor, nautilus_query_editor, GTK_TYPE_WIDGET);
  * A 150ms default search triggering delay is too short even for fast typists in general,
  * so wait 400ms after typing, to improve performance by not spamming search engines: */
 #define SEARCH_CHANGED_TIMEOUT 400
+
+/* In type ahead mode, clear entry if it did not change for a while */
+#define CLEAR_TYPE_AHEAD_TIMEOUT 1000
 
 static void
 update_fts_sensitivity (NautilusQueryEditor *editor)
@@ -143,6 +149,7 @@ nautilus_query_editor_dispose (GObject *object)
     editor = NAUTILUS_QUERY_EDITOR (object);
 
     g_clear_handle_id (&editor->search_changed_timeout_id, g_source_remove);
+    g_clear_handle_id (&editor->clear_type_ahead_timeout_id, g_source_remove);
 
     gtk_widget_unparent (gtk_widget_get_first_child (GTK_WIDGET (editor)));
     g_clear_pointer (&editor->tags_box, gtk_widget_unparent);
@@ -408,6 +415,25 @@ entry_changed_internal (NautilusQueryEditor *editor)
 }
 
 static void
+clear_type_ahead (NautilusQueryEditor *editor)
+{
+    editor->change_frozen = TRUE;
+    gtk_editable_set_text (GTK_EDITABLE (editor->text), "");
+    editor->change_frozen = FALSE;
+}
+
+static gboolean
+clear_type_ahead_timeout_callback (NautilusQueryEditor *editor)
+{
+    if (!editor->searching)
+    {
+        clear_type_ahead (editor);
+    }
+    editor->clear_type_ahead_timeout_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
+static void
 entry_changed_cb (GtkWidget           *entry,
                   NautilusQueryEditor *editor)
 {
@@ -416,10 +442,24 @@ entry_changed_cb (GtkWidget           *entry,
         return;
     }
 
+    g_clear_handle_id (&editor->clear_type_ahead_timeout_id, g_source_remove);
     g_clear_handle_id (&editor->search_changed_timeout_id, g_source_remove);
-    editor->search_changed_timeout_id = g_timeout_add (SEARCH_CHANGED_TIMEOUT,
-                                                       G_SOURCE_FUNC (entry_changed_internal),
-                                                       editor);
+
+    /* In type ahead mode notify immediately that the entry changed, otherwise
+     * wait a few ms to not spam search engines. */
+    if (editor->searching)
+    {
+        editor->search_changed_timeout_id = g_timeout_add (SEARCH_CHANGED_TIMEOUT,
+                                                           G_SOURCE_FUNC (entry_changed_internal),
+                                                           editor);
+    }
+    else
+    {
+        entry_changed_internal (editor);
+        editor->clear_type_ahead_timeout_id = g_timeout_add (CLEAR_TYPE_AHEAD_TIMEOUT,
+                                                             G_SOURCE_FUNC (clear_type_ahead_timeout_callback),
+                                                             editor);
+    }
 }
 
 static GtkWidget *
@@ -676,6 +716,8 @@ nautilus_query_editor_init (NautilusQueryEditor *editor)
                       G_CALLBACK (search_popover_time_type_changed_cb), editor);
     g_signal_connect (editor->popover, "notify::fts-enabled",
                       G_CALLBACK (search_popover_fts_changed_cb), editor);
+
+    editor->searching = FALSE;
 }
 
 static void
@@ -841,4 +883,16 @@ nautilus_query_editor_handle_event (NautilusQueryEditor   *self,
     }
 
     return gtk_event_controller_key_forward (controller, self->text);
+}
+
+void
+nautilus_query_editor_set_searching (NautilusQueryEditor *editor,
+                                     gboolean             searching)
+{
+    g_return_if_fail (NAUTILUS_IS_QUERY_EDITOR (editor));
+    editor->searching = searching;
+    if (!editor->searching)
+    {
+        clear_type_ahead (editor);
+    }
 }

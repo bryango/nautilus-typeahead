@@ -1458,6 +1458,7 @@ const GActionEntry win_entries[] =
     { "forward", action_forward },
     { "back-n", action_back_n, "u" },
     { "forward-n", action_forward_n, "u" },
+    { "backspaceup", action_up },
     { "up", action_up },
     { "view-menu", action_toggle_state_view_button, NULL, "false", NULL },
     { "current-location-menu", action_show_current_location_menu },
@@ -1513,6 +1514,7 @@ nautilus_window_initialize_actions (NautilusWindow *window)
     /* Only accesible by shorcuts */
     nautilus_application_set_accelerators (app, "win.bookmark-current-location", ACCELS ("<control>d", "AddFavorite"));
     nautilus_application_set_accelerator (app, "win.up", "<alt>Up");
+    nautilus_application_set_accelerator (app, "win.backspaceup", "BackSpace");
     nautilus_application_set_accelerators (app, "win.go-home", ACCELS ("<alt>Home", "HomePage", "Start"));
     nautilus_application_set_accelerator (app, "win.go-starred", "Favorites");
     nautilus_application_set_accelerator (app, "win.tab-move-left", "<shift><control>Page_Up");
